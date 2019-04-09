@@ -1,6 +1,8 @@
-﻿# Grand débat : Notes de recherche
+﻿# Grand Débat National - notes de recherche.
 
-Ce repo contient les fichier *.rmd des procédures r mises en place pour analyser les données du Grand débat. On traite la partie 4 : "organisation de l'Etat et des services publics". L'objet du projet étant de comprendre comme les représentations de l'Etat et de sa gestion sont produites dans un dispositif de civic tech. Pour une [première approche du sujet](https://docs.google.com/presentation/d/183XBYjmdz5Jl4aeijg278eBBJWiSdLZox1Vnvt7zMZw/edit?usp=sharing) ainsi qu'une [carte de visite](https://docs.google.com/presentation/d/1f3QoEF_f7eXP-IBlNo5MnzE_itEcy9f09EZEnSC7GS8/edit?usp=sharing)
+Ce repo contient les fichier *.rmd des procédures r mises en place pour analyser les données du Grand Débat Nntional. On se focalise sur la partie 4 : "organisation de l'Etat et des services publics" qui correspond à un ordre de grandeur de 100 000 contributions.
+
+L'objet de notre projet est de d'analyser comment les représentations de l'Etat et de sa gestion sont produites au travers d'un dispositif de civic tech où biais de sélection et biais de cadrage sont considérables. Pour une [première approche du sujet](https://docs.google.com/presentation/d/183XBYjmdz5Jl4aeijg278eBBJWiSdLZox1Vnvt7zMZw/edit?usp=sharing) ainsi qu'une [carte de visite](https://docs.google.com/presentation/d/1f3QoEF_f7eXP-IBlNo5MnzE_itEcy9f09EZEnSC7GS8/edit?usp=sharing)
 
 Le code est reproductible, il demande simplement de télécharger les données disponibles sur le site du [Grand Débat en OpenData](https://granddebat.fr/pages/donnees-ouvertes) -  choisir le jeu de donnée au 21 mars- et la [carte des départements](http://osm13.openstreetmap.fr/~cquest/openfla/export/departements-20180101-shp.zip).
 
