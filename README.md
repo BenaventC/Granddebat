@@ -10,4 +10,4 @@ Le code est reproductible, il demande simplement de télécharger les données d
 
 3 - >[Topic model avec LDA]() - à venir avec solution ldavis.
 
-4 - >[Dynamique de la production]() - à venir. dans quelle mesure la médiatisation peut affecter la production des contenus ( ex LGB)
+4 - >[Dynamique de la production]() - à venir. dans quelle mesure la médiatisation peut affecter la production des contenus (ex LBD)
