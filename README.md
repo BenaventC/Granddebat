@@ -5,4 +5,4 @@ Les données sont disponibles sur le site du [Grand Débat en OpenData](https://
 
 1 - >[Eléments de cadrage](https://benaventc.github.io/Granddebat/GD01_Intro_cadrage.html)
 
-2 - >[Analyse du sentiment](https://benaventc.github.io/Granddebat/GD02_Sentiment02copie.html)
+2 - >[Analyse du sentiment](https://benaventc.github.io/Granddebat/GD02Sentiment02copie.html)
