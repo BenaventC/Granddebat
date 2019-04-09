@@ -1,0 +1,423 @@
+---
+title: "Grand débat - éléments de cadrage"
+author: "CB"
+date: "8 avril 2019"
+output: html_document
+bibliography : GD01centralisation.bib
+tags: [GrandDébat, Civic Tech, Tal, Textuel, map]
+abstract: |
+  Cette première note de cadrage de l'analyse du contenu du corpus du grand Débat (organisation de l'Etat et des services publics) vise à donner des éléments de cadrage : a) participation, b) à partir de 3 questions fermées les grandes options managériales c) un premier coût d'oeil sur les contenus.
+  Elle est aussi l'occasion de partager le code et de le (re)tester. Les résultats doivent être encore considérés comme provisoires, même s'ils sont stabilisés. Une prochaine note est consacrée à une analyse du sentiment, la troisième à l'utilisation d'un modèle LDA pour dégager les thématiques.
+  
+---
+<style type="text/css">
+
+body, td {
+   font-size: 14px;
+}
+code.r{
+  font-size: 10px;
+}
+h1{
+  font-size: 24px;
+}
+h2{
+  font-size: 18px;
+}
+pre {
+  font-size: 11px
+}
+</style>
+
+<center>
+
+![Grand débat - Paris Saint Jacques - perso](granddebat.jpg){ width=75%}
+</center>
+
+
+
+# Introduction
+
+La crise des gilets jaunes après des semaines de manifestation le samedi sur les ronds points et les centres urbains a conduit le gouvernement à mettre en oeuvre un dispositif à mi chemin entre l'enquête ouverte et une idée de démocratie participative dont le produit objectif est la constitution d'un corpus de texte en réponse aux questions posées via ce dispositif. Il n'est pas le seul, les cahiers de doléances qui seront numérisés par la BNF, le site du vrai débat, celui de la grande annotation représentent des sources alternatives.
+
+La faiblesse de ce corpus en termes méthodologiques vient des biais de sélection : qui y participe et pourquoi? Ainsi que des effets de cadrage : comment le questionnaire dirige les interrogations et l'opinion ? Néanmoins avec près de 100 000 contributions uniquement pour la 4ème partie (organisation de l'Etat et des services)  qui nous intéresse principalement, l'objet de notre projet de recherche porte spécifiquement sur la production des représentations publiques de la gestion de l'Etat et des services public par les plateformes de la civic tech), il y a une matière précieuse à analyser. 
+
+Dans cette note de recherche, on partage le code et les élements de résultats d'un premier traitement destiné à cadrer l'analyse des contenus textuels qui sera développée dans les notes ultérieures. 
+
+On se focalise sur deux  questions fermées qui ont l'avantage de cadrer les grandes options d'organisations. Centraliser ou décentraliser? Donner de l'autonomie aux acteurs ou rationnaliser leurs activités ? Une troisième définit le contexte : accède-t-on aisément aux services publics? 
+
+On retrouve de manière très simplifiée le problème de la contingence des organisations (@lawrence_organization_1976): doit-on adopter un modèle  rationel et bureaucratique ou un modèle organique d'organisation? On en connait la réponse : si l'environnement est turbulent le modèle organique est capable d'inventer d'innover et de se transformer, ce qui est exiger pour survivre. Quand l'environnement est au moins prévisible, la performance opérationnelle devient le facteur de survie (@burns_management_1994).
+
+Quand à ce document, c'est principalement un document technique, dont les résultats sont stabilisés. On y partage d'abord le code d'analyse à fin de réplication ( sur d'autres corpus) et de reproductibilité, mais aussi de pédagogie. Le détail du code est disponible sur le [projet github](https://github.com/BenaventC/GrandDebat).
+
+Corrections et suggestions sont bienvenues. Le document est amené à évoluer. 
+
+
+## Initialisation des packages
+
+```{r setup, include=FALSE, echo = FALSE, include=TRUE,message=FALSE,warning=FALSE}
+#option pour le tricotage
+knitr::opts_chunk$set(echo = FALSE, include=TRUE,message=FALSE,warning=FALSE,cache=TRUE)
+#chargement des packages
+library(car)
+library(RcmdrMisc)
+library(Rcmdr)              # la bouée de sauvetage
+library(reshape2)           # un accesoire visuel pour l'analyse des correlations
+library(tidyverse)          # la mode pour r c'est le tidy et il y a ggplot2 pour la viz
+library(viridis)            #palette de couleur
+library(gridExtra)          # c'est pour mettre plusieurs graphiques en un seul
+library(dendextend)         # pour de plus beaux arbres
+library(Rcpp)               # j'ai du avoir besoin de ça
+library(topicmodels)        # pour trouver des sujets de conversations
+library(Rtsne)              # c'est du mds à la sauce relativité - un modèle de champs?
+library(ldatuning)          # des sujets oui mais combiens?
+library(tidytext)           # dans le tidy il y a le rameau du texte
+library(quanteda)           # le plus top des accessoires et les modèles les plus originaux
+library(cleanNLP)           #pour le Pos
+library(syuzhet)             #analyse du sentimeent
+library(DescTools)
+library(knitr)
+library(kableExtra)
+library(flextable)
+library(FactoMineR)        #analyse factorielle
+library("factoextra")
+
+#carto
+library(sf)
+library(readr) #pour lire le fichier csv
+```
+
+## Extraction et recodage des données
+
+```{r extract, include=TRUE}
+df <- read_csv("../ORGANISATION_DE_LETAT_ET_DES_SERVICES_PUBLICS.csv")
+df$authorType<-as.factor(df$authorType)
+#on garde les citoyens
+df<- df %>% mutate(n_contribution=1) %>% filter(authorType=="Citoyen / Citoyenne")
+
+names(df)[12] <- "Organisation_EASP"
+names(df)[13] <- "QTransfertMission"
+names(df)[14] <- "Missions_dec"
+names(df)[15] <- "QAcces_SP"
+names(df)[16] <- "SP_Manquants"
+names(df)[17] <- "SP_Nouveaux"
+names(df)[21] <- "SP_Evolution"
+names(df)[22] <- "SP_Evolution2"
+names(df)[27] <- "Qautonomie"
+names(df)[44] <- "Autres_points"
+
+
+df$QTransfertMission[df$QTransfertMission=="Oui"]<-"Décentraliser"
+df$QTransfertMission[df$QTransfertMission=="Non"]<-"Ne pas décentraliser"
+df$QTransfertMission <-as.factor(df$QTransfertMission)
+
+
+df$Qautonomie[df$Qautonomie=="Non"]<-"Pas d'autonomie"
+df$Qautonomie[df$Qautonomie=="Oui"]<-" Plus d'autonomie"
+df$Qautonomie <-as.factor(df$Qautonomie)
+
+df$QAcces_SP[df$QAcces_SP=="Oui"]<-"Accès facile"
+df$QAcces_SP[df$QAcces_SP=="Non"]<-"Accès difficile"
+df$QAcces_SP<-as.factor(df$QAcces_SP)
+
+names(df)[44] <- "Autres_points"
+
+
+#donnees département
+department <- read_delim("../Map/department.csv", 
+    ";", escape_double = FALSE, trim_ws = TRUE)
+
+df$code_insee<-as.factor(substr(df$authorZipCode,1,2))
+df<-subset(df,select=c(id,authorId,createdAt,code_insee,title,Organisation_EASP,Missions_dec,SP_Manquants,SP_Nouveaux,SP_Evolution, SP_Evolution2,QTransfertMission,Qautonomie,QAcces_SP))
+
+
+```
+
+## Les questions posées :
+
+* le titre de la contribution
+
+* l'organisation de l'état et des services publics : 
+  +  Que pensez-vous de l'organisation de l'Etat et des administrations en France ? 
+  + De quelle manière cette organisation devrait-elle évoluer ? Selon vous, l'Etat doit-il aujourd'hui transférer de nouvelles missions aux collectivités territoriales (oui/non) ? 
+  +  Si oui, lesquelles ?_
+
+* les services manquants : 
+  +  Estimez-vous avoir accès aux services publics dont vous avez besoin (oui/non)  ? 
+  +  Si non, quels types de services publics vous manquent dans votre territoire et qu'il est nécessaire de renforcer ? 
+  +  Quels nouveaux services ou quelles démarches souhaitez-vous voir développées sur Internet en priorité ? 
+ +  Pouvez-vous identifier des règles que l'administration vous a déjà demandé d'appliquer et que vous avez jugées inutiles ou trop complexes ? 
+
+* Faut-il donner plus d'autonomie aux fonctionnaires de terrain ?  (oui/non)
+  +  Si oui, comment ? 
+  +  Faut-il revoir le fonctionnement et la formation de l'administration ? 
+  +  Si oui, comment ? Comment l'Etat et les collectivités territoriales peuvent-ils s'améliorer pour mieux répondre aux défis de nos territoires les plus en difficulté ? 
+  +  Avez-vous déjà utilisé certaines de ces nouvelles formes de services publics ? (oui/non)
+  +  Si oui, en avez-vous été satisfait ? Quelles améliorations préconiseriez-vous ? 
+  +  Quand vous pensez à l'évolution des services publics au cours des dernières années, quels sont ceux qui ont évolué de manière positive ? Quels sont les services publics qui doivent le plus évoluer selon vous ?
+
+Le seul élément qui caractérise l'auteur est la date de publication ainsi que le code postal. On privilégiera donc une analyse spaciale en s'interrogeant sur le bon niveau d'agrégation d'autant plus qu'une analyse sociologique de ce mouvement social a mis en avant un clivage ou un gradient ville périphérie, d'autre au contraire s'opposant à cette vision et rattachant le mouvement à des caractéristiques sociales particulières. Le niveau le plus fin est celui de la commune mais le corpus depasse à peine le nombre des communes, celui du départment est le plus aisé.
+
+
+# La carte de la participation
+
+les absents et les présents nord et sud? 
+
+un taux de participation de 4 pour 1000 habitant. Difficile de connaitre la population voir article de @bennani_les_2019 repris par [Martin Anota](https://blogs.alternatives-economiques.fr/anota/2019/04/05/qui-a-participe-en-ligne-au-grand-debat-national)
+
+
+```{r map, include=TRUE}
+df$n<-1
+df_code_insee<-aggregate(n ~ code_insee, data = df, FUN=sum)
+
+a<-paste("C:/Users/UserPC/Documents/AtelierR/GiletJaune/Map/DEPARTEMENT.shp")
+dep<-sf::st_read(a,quiet = TRUE)
+#st_crs(dep) <- 4326 #changer le referentiel
+names(dep)[3] <- "code_insee"
+dep_c<-merge(department,df_code_insee, by ="code_insee")
+
+dep_c<-merge(dep,dep_c, by ="code_insee")
+dep_c$Nb_menages_2015<-as.numeric(dep_c$Nb_menages_2015)
+dep_c$NiveauVie_2015<-as.numeric(dep_c$NiveauVie_2015)
+
+nb<-ggplot(dep_c) + geom_sf(aes(fill=n*1000/Nb_menages_2015))+coord_sf()+scale_fill_viridis(option = "D",direction=-1)+theme_minimal()
+nb
+```
+
+
+# Décentralisation, autonomie et accès au service public
+
+trois question fermée permettent de cadrer les opinions
+ * l'accès aisé ou difficile aux services public : un quart ne répond pas, un quart a des difficultés, la moitié n'en ont pas. L'accès est donc un  problème pour un contributeur sur trois. 
+ * en faveur ou non pour la décentralisation : les points de vue sont également partagés, un tiers des contributeurs ne prennent pas position.
+ * en faveur ou non  l'autonomie des fonctionnaires de terrain. l'autonomie est très majoritaire, dans un rapport de 1 à 4. 
+
+
+```{r map02, include=TRUE}
+library(reshape2)
+Q<-df %>% select(id=id,Acces=QAcces_SP, Decentralisation=QTransfertMission, Autonomie=Qautonomie)
+Q2<-melt(Q,id.vars = "id")
+ggplot(Q2,aes(x=variable,fill = value))+geom_bar()+theme_minimal()+ scale_fill_manual("legend", values = c(" Plus d'autonomie" = "moccasin","Accès difficile" = "orange","Accès facile" = "orange4","Décentraliser" = "royalblue1","Ne pas décentraliser" = "royalblue4","Pas d'autonomie" = "navajowhite4","NA" = "grey" ))+coord_flip()
+                                 
+                                 
+x <- as.data.frame(ftable(df[c("QAcces_SP", "QTransfertMission", "Qautonomie")], row.vars = c(2, 3)))
+
+flextable(x)
+
+```
+
+Les relations entre les trois variables sont analysées avec un mosaic plot pour décomposer la contribution au chi2  et une AFCM.
+Manifestement les non réponse se distinguant signalent qu'elle se distribue sans doute également. Le fait principal est l'axe qui oppose décentralisation/autonomie et la rationnalisation/réduction comme on le verra plus tard. Le choix entre ces deux options n'est pas attaché à la difficulté d'accès aux services publiques. Ce choix dépend moins de la situation vécue que sans doute d'options plus fondamentales et idéologiques. Un enjeu important sera donc pour l'analyse du texte, celui de mieux cerner comment ces options se contruisent et d'identifier les argumentations qui les soutiennent.
+
+
+```{r crosstabs, include=TRUE}
+
+.Table <- xtabs(~Acces+Decentralisation, data=Q)
+t1 <- chisq.test(.Table, correct=FALSE)
+
+.Table <- xtabs(~Acces+Autonomie, data=Q)
+ t2<- chisq.test(.Table, correct=FALSE)
+
+.Table <- xtabs(~Decentralisation+Autonomie, data=Q)
+ t3<- chisq.test(.Table, correct=FALSE)
+
+AccesXDecentr<-t1[1]
+AccesXAuton<-t2[1]
+AutonXDecentr<-t3[1]
+kable(rbind(AccesXDecentr,AccesXAuton,AutonXDecentr))
+
+mosaicplot(~ QAcces_SP + QTransfertMission + Qautonomie, data = df,
+           main = "Accès  et décentralisation", shade = TRUE)
+
+
+Q3<-Q
+Q3<-Q3[,2:4]
+res.mca <- MCA(Q3, ncp = 2, graph = FALSE)
+
+fviz_screeplot(res.mca, addlabels = TRUE, ylim = c(0, 45))
+fviz_mca_var(res.mca, col.var="steelblue")+
+ theme_minimal()
+```
+
+
+## Facilité de l'accès aux services publics 
+
+Le problème de la france centrale. Le poids des métropoles.
+
+```{r statelem, include=TRUE}
+
+df$QSP<-0
+df$QSP[df$QAcces_SP=="Accès difficile"]<-1
+df_code_insee<-aggregate(QSP ~ code_insee, data = df, FUN="mean")
+
+a<-paste("C:/Users/UserPC/Documents/AtelierR/GiletJaune/Map/DEPARTEMENT.shp")
+dep<-sf::st_read(a,quiet = TRUE)
+#st_crs(dep) <- 4326 #changer le referentiel
+names(dep)[3] <- "code_insee"
+dep_c<-merge(department,df_code_insee, by ="code_insee")
+
+dep_c<-merge(dep,dep_c, by ="code_insee")
+
+nb<-ggplot(dep_c) + geom_sf(aes(fill=QSP))+coord_sf()+scale_fill_viridis(option = "D",direction=-1)+ labs(fill = "% qui on un accès difficile aux services publics")
+nb
+
+ggplot(df,aes(x=code_insee,fill=QAcces_SP))+geom_bar(position = "fill")+ theme_minimal()+coord_flip()+ theme(axis.text=element_text(size=5))
+
+```
+ 
+ 
+## Décentralisation
+
+Le propre des extrémités du territoire : Bretagne et la facade atlantique, Alsace et plus généralement les départments frontalier sonts clairement en faveur d'un transfert de mission au collectivités locales. On en saisit naturellement pas les nuances.
+
+
+```{r map01, include=TRUE}
+
+df$QTF<-0
+df$QTF[df$QTransfertMission=="Décentraliser"]<-1
+df_code_insee<-aggregate(QTF ~ code_insee, data = df, FUN="mean")
+
+a<-paste("C:/Users/UserPC/Documents/AtelierR/GiletJaune/Map/DEPARTEMENT.shp")
+dep<-sf::st_read(a,quiet = TRUE)
+#class(dep)
+#st_crs(dep)
+#st_crs(dep) <- 4326 #changer le referentiel
+names(dep)[3] <- "code_insee"
+dep_c<-merge(department,df_code_insee, by ="code_insee")
+
+dep_c<-merge(dep,dep_c, by ="code_insee")
+
+nb<-ggplot(dep_c) + geom_sf(aes(fill=QTF))+coord_sf()+scale_fill_viridis(option = "D",direction=-1)+ labs(fill = "% en faveur d'un transfert de missions")
+nb
+
+ggplot(df,aes(x=code_insee,fill=QTransfertMission))+geom_bar(position = "fill")+theme(axis.text=element_text(size=5))+ theme_minimal()+coord_flip()
+
+```
+  
+
+## Autonomie des fonctionnaires de terrain
+
+l'autonomie est le fait de la france centrale et des départements éloignés des capitales régionales.
+
+```{r statelem02, include=TRUE}
+
+df$QSA<-0
+df$QSA[df$Qautonomie=="Plus d'autonomie"]<-1
+df_code_insee<-aggregate(QSP ~ code_insee, data = df, FUN="mean")
+
+a<-paste("C:/Users/UserPC/Documents/AtelierR/GiletJaune/Map/DEPARTEMENT.shp")
+dep<-sf::st_read(a,quiet = TRUE)
+#st_crs(dep) <- 4326 #changer le referentiel
+names(dep)[3] <- "code_insee"
+dep_c<-merge(department,df_code_insee, by ="code_insee")
+
+dep_c<-merge(dep,dep_c, by ="code_insee")
+
+nb<-ggplot(dep_c) + geom_sf(aes(fill=QSP))+coord_sf()+scale_fill_viridis(option = "D",direction=-1)+ labs(titre="Favorable à l'autonomie des fonctionnaires",fill = "% ")
+nb
+
+ggplot(df,aes(x=code_insee,fill=Qautonomie))+geom_bar(position = "fill")+ theme_minimal()+coord_flip()+ theme(axis.text=element_text(size=5))
+
+```
+
+
+
+# Eléments de contenu des documents
+
+## Distribution quantitative du contenu
+
+Une distribution inégale du volume de contribution est mesurée au travers du nombre de signes. Un quart des contributeurs génère les 3/4 du volume de texte.
+
+```{r cars, fig.cap=""}
+library(ineq)
+library(gglorenz)
+df$nbcar<-as.numeric(nchar(df$Organisation_EASP))
+
+Corpus<-corpus(df,text_field="Organisation_EASP") #corpus de base qui sera filtré
+Corpus<-corpus_subset(Corpus, nbcar > 1)
+
+g08<-ggplot(df,aes(x=nbcar))+geom_histogram(binwidth = 5)+xlim(0,2000)+theme_minimal()
+
+gini<-round(ineq(df$nbcar,type = c("Gini")),2)
+
+df_pf<-df %>% filter(nbcar>0)
+g09<-ggplot(df_pf, aes(nbcar)) +stat_lorenz(desc = TRUE,size=1.2,color="Darkgreen") +coord_fixed() +geom_abline(linetype = "dashed") +theme_minimal() + annotate("text", x=0.15, y=0.9, label= paste0("indice de Gini=",gini))+theme_minimal()
+grid.arrange(g08,g09,ncol=2)
+```
+
+
+
+## WordCloud
+
+Pour finir un premier aperçu du contenu avec un traitement de la question " que pensez vous de l'organisation de l'éTat et des services publiques ? "
+
+controle par
+max_docfreq : éviter les termes trop nombreux. 
+min_termfreq : la fréquence minimale d'apparition dans les documents. 
+
+
+```{r wordcloud01}
+
+#wordcloud et fréquence
+toks <- tokens(Corpus) %>% tokens_tolower() %>%
+       tokens_select(pattern = "^[A-Z]", valuetype = "regex", case_insensitive = TRUE, padding = TRUE) %>% 
+       tokens_remove(c("zut")) 
+
+col <- toks %>% textstat_collocations(min_count = 200,size=2:3, tolower = TRUE)
+head(col,15)
+comp_toks <- tokens_compound(toks, pattern = col[col$lambda > 6]) %>% tokens_remove(stopwords("fr"))
+
+
+set.seed(100) #pour rejouer le hasard de la même mani-re et etproduire les resultats
+dfm2<-dfm(comp_toks, tolower = TRUE,stem=FALSE) %>%
+  dfm_trim(min_termfreq = 0.95, termfreq_type = "quantile", max_docfreq = 0.12, docfreq_type = "prop")
+
+textplot_wordcloud(dfm2,min_count = 500, rotation = 0.0, adjust=0.0,max_size=2.5,
+                   color = rev(RColorBrewer::brewer.pal(8, "RdBu")))
+```
+
+De manière équivalente la liste des mots les plus fréquents.
+
+```{r wordcloud03}
+freq_dfm <- textstat_frequency(dfm2)
+#term<-"sécurité" #par groupe 
+#freq_room <- subset(freq_dfm, freq_dfm$feature %in% paste0(term))  #attention à la graphie si stemming
+
+ggplot(freq_dfm[1:40,], aes(x = reorder(feature,frequency), y = frequency)) +
+    geom_point() +  xlab(NULL) +  ylab("Frequency") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, size=8),axis.text.y =  element_text(size=8))+
+    coord_flip()+labs(title="")+ theme_minimal()
+
+#    scale_y_continuous(limits = c(0, 5000), breaks = c(seq(0, 5000, 250))) +
+
+```
+
+
+
+## Key Word Index 
+
+et pour conclure, retour au texte,  un coup d'oeil sur le contexte de deux mots clés : décentralisation et autonomie.
+
+```{r cars2}
+
+
+#pour remettre les mots en contexte
+
+kw <- kwic(Corpus, pattern =  'Décentralisation',window = 5)
+kw<-head(kw, 20)
+kable(kw) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = F)
+
+kw <- kwic(Corpus, pattern =  'autonomie',window = 5)
+kw<-head(kw, 20)
+kable(kw) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+```
+
+
+# Références :
+
+un site capital est https://statistiques-locales.insee.fr/#c=indicator&i=filosofi.med&s=2015&view=map1
+
+http://leotrespeuch.com/2019/02/13/synthese-grand-debat-granddebat-fr/
