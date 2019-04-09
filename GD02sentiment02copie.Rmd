@@ -1,0 +1,422 @@
+---
+title: "Grand débat - analyse du Sentiment"
+author: "CB"
+date: "9 avril 2019"
+output: html_document
+tags: [GrandDébat, Civic Tech, Tal, Textuel, map, Sentiment, Emotions]
+
+---
+<style type="text/css">
+
+body, td {
+   font-size: 14px;
+}
+code.r{
+  font-size: 10px;
+}
+h1{
+  font-size: 24px;
+}
+h2{
+  font-size: 18px;
+}
+pre {
+  font-size: 11px
+}
+</style>
+
+<center>
+
+![Franz Xaver Messerschmidt from 1777](hommevexe.jpg){ width=85%}
+
+</center>
+# Introduction
+
+Dans cette étude on s'appuie sur un indicateur de sentiment, le NRC, qui présente l'avantage d'être disponible en français mais aussi d'offrir différents indicateurs de sentiment, des polarité, et une palette d'émotion qui s'appuient sur les travaux de pluchnik.
+
+On explore la sensibilité et la cohérence de cet indicateur dans cette note technique et on y découvre le moyen de distinguer les contributions constructives des revendications dénonciatrices. 
+
+
+## Initialisation des packages
+
+voir le rmd dans le [projet github](https://github.com/BenaventC/Granddebat)
+
+```{r setup, include = FALSE }
+#option pour le tricotage
+knitr::opts_chunk$set(echo = FALSE, include=TRUE,message=FALSE,warning=FALSE,cache=TRUE)
+#chargement des packages
+library(reshape2)           # un accessoire visuel pour l'analyse des correlations
+library(tidyverse)          # la mode pour r c'est le tidy et il y a ggplot2 pour la viz
+library(viridis)            #palette de couleur
+library(gridExtra)          # c'est pour mettre plusieurs graphiques en un seul
+library(dendextend)         # pour de plus beaux arbres
+library(Rcpp)               # j'ai du avoir besoin de ça
+library(topicmodels)        # pour trouver des sujets de conversations
+library(Rtsne)              # c'est du mds à la sauce relativité - un modèle de champs?
+library(ldatuning)          # des sujets oui mais combiens?
+library(tidytext)           # dans le tidy il y a le rameau du texte
+library(quanteda)           # le plus top des accessoires et les modèles les plus originaux
+#library(textcat)            # identification des langues non utilisé mais on pourrait ( basque breton ?)
+library(cleanNLP)           #pour le Pos
+library(syuzhet)             #analyse du sentimeent
+library(DescTools)
+
+#library(quanteda.dictionaries) #attention aux langues!
+library(knitr)
+library(kableExtra)
+#carto
+library(sf)
+library(readr) #pour lire le fichier csv
+```
+
+## Extraction et recodage des données
+
+voir le rmd dans le [projet github](https://github.com/BenaventC/Granddebat)
+
+```{r extract}
+df <- read_csv("../ORGANISATION_DE_LETAT_ET_DES_SERVICES_PUBLICS.csv")
+df$authorType<-as.factor(df$authorType)
+#on garde les citoyens
+df<- df %>% mutate(n_contribution=1) %>% filter(authorType=="Citoyen / Citoyenne")
+
+names(df)[12] <- "Organisation_EASP"
+names(df)[13] <- "QTransfertMission"
+names(df)[14] <- "Missions_dec"
+names(df)[15] <- "QAcces_SP"
+names(df)[16] <- "SP_Manquants"
+names(df)[17] <- "SP_Nouveaux"
+names(df)[21] <- "SP_Evolution"
+names(df)[22] <- "SP_Evolution2"
+names(df)[27] <- "Qautonomie"
+names(df)[44] <- "Autres_points"
+
+
+df$QTransfertMission[df$QTransfertMission=="Oui"]<-"Décentraliser"
+df$QTransfertMission[df$QTransfertMission=="Non"]<-"Ne pas décentraliser"
+df$QTransfertMission <-as.factor(df$QTransfertMission)
+
+
+df$Qautonomie[df$Qautonomie=="Non"]<-"Pas d'autonomie"
+df$Qautonomie[df$Qautonomie=="Oui"]<-" Plus d'autonomie"
+df$Qautonomie <-as.factor(df$Qautonomie)
+
+df$QAcces_SP[df$QAcces_SP=="Oui"]<-"Accès facile"
+df$QAcces_SP[df$QAcces_SP=="Non"]<-"Accès difficile"
+df$QAcces_SP<-as.factor(df$QAcces_SP)
+
+names(df)[44] <- "Autres_points"
+
+
+#donnees département
+department <- read_delim("../Map/department.csv", 
+    ";", escape_double = FALSE, trim_ws = TRUE)
+
+df$code_insee<-as.factor(substr(df$authorZipCode,1,2))
+df<-subset(df,select=c(id,authorId,createdAt,code_insee,title,Organisation_EASP,Missions_dec,SP_Manquants,SP_Nouveaux,SP_Evolution, SP_Evolution2,QTransfertMission,Qautonomie,QAcces_SP))
+
+```
+
+# Analyse du sentiment 
+
+on utilise le package [syuzhet](https://www.rdocumentation.org/packages/syuzhet/versions/1.0.4) et en particulier le dictionnaire  "nrc" developpé par Mohammad, Saif M. et al pour la raison pratique que lui seul propose un dictionnaire en français.
+
+On filtre le corpus sur un critère de 50 caractères minimum ou une dizaine de mots. Pour l'instant on élimine pas les textes très longs qui contribuent plus que proportionnellement au corpus (voir distribution des caractères dans [la note 1](https://benaventc.github.io/GrandDebat/GD01_Intro_cadrage). Une option est de travailler sur l'ensemble du texte en concaténant les variables textes. C'est cette option qui est choisie.
+
+```{r sent02, echo=TRUE}
+#on selectionne le corpus minimal
+#concat
+df$title[is.na(df$title)]<-" "
+df$Organisation_EASP[is.na(df$Organisation_EASP)]<-" "
+df$Missions_dec[is.na(df$Missions_dec)]<-" "
+df$SP_Manquants[is.na(df$SP_Manquants)]<-" "
+df$SP_Nouveaux[is.na(df$SP_Nouveaux)]<-" "
+df$SP_Evolution[is.na(df$SP_Evolution)]<-" "
+df$SP_Evolution2[is.na(df$SP_Evolution2)]<-" "
+
+df2<-df %>% unite_("text", c("title","Organisation_EASP","Missions_dec","SP_Manquants","SP_Nouveaux","SP_Evolution","SP_Evolution2"),sep = " ") 
+df2$nbcar<-as.numeric(nchar(df2$text))
+df2<-df2 %>% filter(nbcar>50)
+#paramètres
+method <- "nrc"
+lang <- "french"
+phrase<-as.character(df2$text)
+#extraction
+my_text_values_french<- get_sentiment(phrase, method=method, language=lang)
+```
+
+## La distribution du sentiment
+
+Le sentiment est plutôt positif, même si une fraction importante des contributions présentent des valeurs négatives. La variance est relativement élevées. Elle se distribue plutôt normalement au moins de manière symétrique.
+
+
+```{r sent03}
+#ajout de la colonne sentiment au tableau de données des contributions:
+
+sent<-as.data.frame(my_text_values_french)
+sent$sentiment<-as.numeric(sent$my_text_values_french)
+df3<-cbind(df2,sent)
+
+#statistiques 
+mean<-round(mean(df3$sentiment),2)
+std<-round(sd(df3$sentiment),2)
+#histogram
+df3$quintile<-cut(df3$sentiment, quantile(df3$sentiment))
+pal=c("red","yellow","green","darkgreen")
+ggplot(df3, aes(x=sentiment))+geom_histogram(binwidth=1,aes(fill=quintile))+theme_minimal()+xlim(-10,+15)+ annotate("text", x=7, y=13000, label= paste0("Moyenne=",mean," Sd=",std ))+  scale_fill_manual(values=c("red3", "red4", "springgreen4", "springgreen3"))
+```
+
+## La carte du sentiment
+
+Il est difficile d'observer un pattern clair, les différences sont plus importantes sur un plan individuel.
+
+```{r sent04}
+
+#agregation sur le department
+AgSent<- aggregate(sentiment~ code_insee, data=df3, FUN="mean")
+
+#lecture de la carte creation d'une variable surface et merge avec le sentiment
+a<-paste("C:/Users/UserPC/Documents/AtelierR/GiletJaune/Map/DEPARTEMENT.shp")
+dep<-sf::st_read(a)
+dep$area_sqkm <- st_area(dep) / 1000000
+names(dep)[3] <- "code_insee"
+dep_c<-merge(dep,AgSent, by ="code_insee")
+
+#generation de la carte
+map<-ggplot(dep_c) + geom_sf(aes(fill=sentiment))+scale_fill_viridis(option = "D",direction=-1)
+map
+```
+
+
+## Quelques déterminants départementaux
+
+On peut expliquer les variations du sentiment par des variables mesurées au niveau du départment. On teste ici des indicateurs simples :
+
+  * Richesse en terme de niveau de vie
+  * Densité de population
+  * Densité de richesse 
+ 
+Seul le niveau de vie est lié de manière significative, mais on sera prudent avec ce niveau d'agrégation qui est sans doute insuffisemment granulaire. On peut parfaitement compléter par d'autres variables, et en particulier les niveaux d'éducation,  ce qu'on fait monnery et al sur la participation. A developper donc.
+
+```{r sent05}
+#un petit modèle de regression 
+dep_d<-merge(dep_c,department, by ="code_insee")
+dep_d$NiveauVie_2015<- as.numeric(dep_d$NiveauVie_2015)/1000
+dep_d$Nb_menages_2015<- as.numeric(dep_d$Nb_menages_2015)
+dep_d$area_sqkm<- as.numeric(dep_d$area_sqkm)
+
+dep_d$density_h<- as.numeric(dep_d$Nb_menages_2015/dep_d$area_sqkm)
+dep_d$density_w<- as.numeric((dep_d$NiveauVie_2015*dep_d$Nb_menages_2015)/dep_d$area_sqkm)
+
+ggplot(dep_d,aes(x=NiveauVie_2015, y=sentiment))+geom_point()+geom_smooth(method = "lm", se = TRUE)
+reg<-lm(sentiment~NiveauVie_2015+density_w+density_h,dep_d)
+summary(reg)
+```
+
+
+## L'accès aux SP, le souhait d'autonomie et la décentralisation
+
+Une analyse de variance montre que l'accès difficile ou aisé aux services publiques n'explique pas le sentiment. En revanche, prendre parti pour la décentralisation, et plus encore pour l'autonomie des fonctionnaires, est associé à des contributions dont le contenu est plutôt positif. 
+
+Ceci peut s'expliquer par le fait de porter ces conceptions conduit à proposer des solutions alternatives et positives, la critique porte sur l'inéfficience du système et se déporte sur la propositions d'alternatives. La conception antagoniste est sans doute plus chargée de récriminations, elles se constitue dans une dénonciation de l'inéfficacité, et recommande de manière punitive des actions de réduction, de suppression, de contrôle accru. C'est une hypothèse qu'il va falloir éprouver dans l'analyse des contenus.
+
+```{r sent06}
+S<-df3  %>%
+  group_by(QTransfertMission,Qautonomie,QAcces_SP) %>%
+  summarize(Sentiment = mean(sentiment, na.rm = TRUE),n=n())%>% na.omit()
+
+ggplot(S,aes(x = QTransfertMission, y=Sentiment, group=Qautonomie))+geom_line(aes(color=Qautonomie), size=1.4)+facet_grid(.~QAcces_SP)+theme_minimal()
+
+test<-lm(sentiment~QTransfertMission+QAcces_SP+Qautonomie,data=df3)
+summary(test)
+anova(test)
+```
+
+
+# Analyse des émotions - nrc
+
+on utilise simplement la fonction `get_nrc_sentiment`, en précisant le dictionnaire français. L'échelle comprend en fait deux éléments : les 8 émotion de base au sens de pluchik, et deux indicateurs de polarité.
+
+
+```{r sent07}
+
+emotions <- get_nrc_sentiment(phrase,language = "french")
+
+```
+
+
+## Les polarités
+
+Les textes étant inégaux en taille on va ramener l'indicateur de polarité au nombre de caractères (une base de 100) de chaque contribution. En effet l'algo compte les valence et leur intensité est proportionnel à la longueur du texte. Ce qui est clairement démontré par la seconde figue. 
+
+A partir de ces deux mesures,  4 indicateurs peuvent êtres construits
+
+ *  Positivité : nombre de termes positifs pour 100 signes.
+ *  Négativitivé : nombre de termes positifs pour 100 signes.
+ *  Valence : rapport du nombre de termes positifs pour 100 signes sur les négatifs
+ *  Expressivité : nombre de termes positifs et négatifs pour 100 signes.
+
+le dernier graphe pour apprend que les jugements plutôt positifs sont aussi les moins expressifs. On trouve ici un argument en faveur de l'analyse précédente. 
+
+```{r sent08}
+polarity<-subset(emotions,select=c(positive, negative))
+df3<-cbind(df2,polarity)
+
+G1<-ggplot(df3, aes(x=positive))+geom_histogram(binwidth = 1)+xlim(-1,40)+ylim(0,25000)+theme_minimal()
+G2<-ggplot(df3, aes(x=negative))+geom_histogram(binwidth = 1)+xlim(-1,40)+ylim(0,25000)+theme_minimal()
+grid.arrange(G1,G2,ncol=2)
+
+G01<-ggplot(df3, aes(x=nbcar,y=positive ))+geom_point()+geom_smooth(method = "gam", formula = y ~ s(x, bs = "cs"))+xlim(0,20000)+theme_minimal()
+G02<-ggplot(df3, aes(x=nbcar,y=negative ))+geom_point()+geom_smooth(method = "gam", formula = y ~ s(x, bs = "cs"))+xlim(0,20000)+theme_minimal()
+grid.arrange(G01,G02,ncol=2)
+
+
+df3$positivity<-(df3$positive*100)/(df3$nbcar)
+df3$negativity<-(df3$negative*100)/(df3$nbcar)
+df3$valence<-log((df3$positivity/df3$negativity)+0.1)
+df3$emotionnality<-log(df3$positivity+df3$negativity)
+
+                           
+G11<-ggplot(df3, aes(x=negativity,y=positivity ))+geom_point(color="grey")+geom_smooth(method = "gam", formula = y ~ s(x, bs = "cs"))+theme_minimal()
+
+G12<-ggplot(df3, aes(x=valence,y=emotionnality ))+geom_point(color="grey")+geom_smooth(method = "gam", formula = y ~ s(x, bs = "cs"))+theme_minimal()+xlim(-2,2.5)
+grid.arrange(G11,G12,ncol=2)
+
+```
+
+Encore un peu de chloroplète...pour comparer emotionnalité et valence du discours. Il semblerait bien que l'emotionnalité soit associé à la négativité, les cartes se recoupent. 
+
+On testant la correlation au niveau du département, on s'aperçoit d'une corrélation très nette. Elle est moins évidente avec la positivité. Le caractère revendicatif est dépendant des arguments proposés : des solutions ou des dénonciations.
+
+
+```{r sent09}
+#carto
+AgV<- aggregate(cbind(positivity,negativity,valence,emotionnality) ~ code_insee, data=df3, FUN="mean")
+
+dep_c<-merge(dep_d,AgV, by ="code_insee")
+
+nb1<-ggplot(dep_c) + geom_sf(aes(fill=negativity))+coord_sf()+scale_fill_viridis(option = "D",direction=-1)+ labs(fill = "negativity")+theme_minimal()
+nb2<-ggplot(dep_c) + geom_sf(aes(fill=emotionnality))+coord_sf()+scale_fill_viridis(option = "D",direction=-1)+ labs(fill = "emotionnality")+theme_minimal()
+
+grid.arrange(nb1,nb2,ncol=2)
+
+s1<-ggplot(dep_c, aes(x=negativity,y=emotionnality ))+geom_point()+geom_smooth(method = "gam", formula = y ~ s(x, bs = "cs"))+theme_minimal()
+s2<-ggplot(dep_c, aes(x=positivity,y=emotionnality ))+geom_point()+geom_smooth(method = "gam", formula = y ~ s(x, bs = "cs"))+theme_minimal()
+grid.arrange(s1,s2,ncol=2)
+
+```
+
+## Les émotions
+
+On se concentre sur les 8 facettes de l'émotion telle que conceptualisée par [Plutchik](https://positivepsychologyprogram.com/emotion-wheel/) 
+
+– trust goes from acceptance to admiration
+– fear goes from timidity to terror
+– surprise goes from uncertainty to amazement
+– sadness goes from gloominess to grief
+– disgust goes from dislike to loathing
+– anger goes from annoyance to fury
+– anticipation goes from interest to vigilance
+– joy goes from serenity to ecstasy
+
+et mesurée sur la base des textes par l'outil NCR élaborée par [Mohammad Saif](http://saifmohammad.com/WebPages/lexicons.html) et pour le français [voir](http://sentiment.nrc.ca/lexicons-for-research/).
+
+On peut raisonner en part relative des émotions dans le mesure où l'outil NCR compte les éléments probables de chacune des émotions. C'est pourquoi on recode les variables, encore une fois les textes long risquent de peser plus que les textes courts, la normalisation est nécessaire.
+
+
+```{r sent10}
+#recodage relatif
+emo<-subset(emotions,select=-c(positive, negative))
+emo$tot<-rowSums (emo, na.rm = FALSE, dims = 1)
+emo$anger<-emo$anger/emo$tot
+emo$anticipation<-emo$anticipation/emo$tot
+emo$disgust<-emo$disgust/emo$tot
+emo$fear<-emo$fear/emo$tot
+emo$joy<-emo$joy/emo$tot
+emo$sadness<-emo$sadness/emo$tot
+emo$surprise<-emo$surprise/emo$tot
+emo$trust<-emo$trust/emo$tot
+emo<-subset(emo,select=-c(tot))
+
+df2<-cbind(df2,emo)
+
+
+#la distribution des émotions
+  
+emo2<-melt(emo)
+
+emo2$variable<-factor(emo2$variable, ordered = TRUE,levels = c("joy","trust","fear","surprise","sadness","disgust","anger","anticipation"))
+pal<-c("yellow","green","olivedrab3","green4","royalblue3","purple3","red3","orangered2")
+emo3<-aggregate(value~variable,data=emo2, FUN="mean")
+
+ggplot(data=emo3,  aes(x=variable, y=value, colour=variable)) + 
+  geom_bar(stat="identity", aes(fill=variable)) +
+  xlab("Emotions") + 
+  ylab("%") + 
+  ylim(-0.1,.3) + ggtitle("Distribution des émotions dans le corpus")  + 
+  geom_hline(aes(yintercept=0), lwd=0.3, lty=1) + 
+  coord_polar()+ scale_color_manual(values=pal)+ scale_fill_manual(values=pal)+theme_minimal()
+
+ggplot(emo2, aes(x=variable, y=value))+geom_violin(aes(fill=variable), alpha=0.7,adjust = 2)+theme_minimal()+ylim(0,1)+ scale_fill_manual(values=pal)
+
+```
+
+et la distribution spatiale des émotions : confiance et tristesse...
+
+```{r sent11}
+Ag<- aggregate(cbind(anger,disgust,fear,sadness,surprise,anticipation,trust,joy) ~ code_insee, data=df2, FUN="mean")
+
+dep_c2<-merge(dep_c,Ag, by ="code_insee")
+
+nb1<-ggplot(dep_c2) + geom_sf(aes(fill=sadness))+coord_sf()+scale_fill_viridis(option = "D",direction=-1)+ labs(fill = "sadness")
+
+
+nb2<-ggplot(dep_c2) + geom_sf(aes(fill=trust))+coord_sf()+scale_fill_viridis(option = "D",direction=-1)+ labs(fill = "trust")
+grid.arrange(nb1,nb2,ncol=2)
+```
+
+## Les émotions et la politique du territoire
+
+Le premier élément est que le sentiment est plus positif, ici sur le critère de confiance,  quand l'accès aux services public est aisés que lorqu'il est difficile. Les différences en terme d'autonomie sont très faibles, en revanche une différenc eplus nette est observée entre ceux qui sont pour la décentralisation et ceux qui le sont moins. Les différences sont cependant très faibles.
+
+Il reste a explorer systématiquement des autres émotions. Nous aurons au moins montré que l'on peut capter des différences émotionnelles à l'échelle du territoire. Un terrain de recherche est ouvert pour mieux en établir, la validité, la fiabilité et la sensibilité pour les employer dans des analyses plus fines. Notamment la manière dont les populations, distribuées  dans situations sociales et spatiales particulières, expriment leurs sentiments et être capable de les comparer.
+
+La tonalité positive qui est employée est très certainement lié aux biais de selection qui oeuvrent dans la participation. La véhémence est marginale. 
+
+
+```{r sent12}
+S<-aggregate(trust~QTransfertMission+Qautonomie+QAcces_SP,data=df2, FUN="mean")
+
+ggplot(S,aes(x = QTransfertMission, y=trust, group=Qautonomie))+geom_line(aes(color=Qautonomie), size=1.2)+facet_grid(.~QAcces_SP)
+test<-lm(trust~QTransfertMission+QAcces_SP+Qautonomie,data=df2)
+summary(test)
+anova(test)
+
+```
+
+# Conclusion
+
+## Le résultat : 
+
+l'émotion du grand débat n'est pas celle de l'[homme vexé](http://www.lamauvaiseherbe.net/2011/12/17/tetes-de-caractere-de-franz-xaver-messerschmidt-la-beaute-du-laid/) que l'on attendait. Plutôt positive et neutre émotionnellement elle reflète des biais de sélection dans la participation.
+
+Mais ce sont des variations qui semblent répondre à un schéma compréhensible : deux types de contributions , les unes constructives et apaisées, les autres plus revendicatives et expressives. Pourquoi dans certains endroits les unes prédominent sur les autres est un thème de recherche à approfondir. 
+
+##limites
+
+L'analyse du sentiment est un processus plein de piège, et dépends des dictionnaires, celà pose un problème de qualité de la méthode. Il faudra sans doute des benchmark, au minimum l'établissement d'un standard, et examiner la convergence de différentes méthodes. 
+
+Mais ce n'est pas un problème pour l'analyse comparative si les biais sont systématiques et proportionnels. A défaut d'une mesure aux grandeurs établie, on dispose d'un instrument ordinal qui permet au point les comparaisons. Quant à la sensibilité et la fiabilité, une étape suivante sera d'étudier leur convergence avec d'autres méthodes.
+
+la territorialité pose problème, le département n'est pas une bonne unité d'analyse, il moyenne les disparités d'espace et de surface. L'analyse doit être répliquée au niveau communal avec des comparaisons selon des types de communes, de manière à saisir les variations plus fines des environnement sociaux.
+
+
+# Références
+
+[Crédit photo](https://www.flickr.com/photos/grahambones/3794639377/in/photolist-6Mjw5R-aA1fqV-8LskTt-ds7SSv-23iGA1K-4NeNc7-oyhct8-6PiJqQ-4C8vRw-ds8Gg6-U6UNAL-fATrFq-UrJAaq-25UQxQm-UrJAgC-fASTcu-4C8vFm-fATnEA-fAD1aP-fASNTh-fACu3F-8GYchw-fADgwP-fADi3n-fATsWd-2eN6y6b-fATwi1-fACfsT-fASUtY-ds8UB5-8BdGjD-fAD9PV-fACK56-fADjig-fADsyz-fATtWq-fASEod-fATf8Q-fACGJK-fAD5QK-fADnt6-fATYbb-fACZ9F-fAD4Le-fAD94c-fADegF-25JR7yL-fACFAp-fATVTs-fASzfY)
+à ajouter :
+
+plutchik 
+monnery
+Said
+
+
